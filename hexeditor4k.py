@@ -1,7 +1,8 @@
 #!/usr/bin/env python3.14
 """
 AC's Hex Editor
-A HexFiend-style hex editor with Atari & PS5 file format support
+A HexFiend-style hex editor with multi-console ROM & disc image support
+(Atari, NES, SNES, N64, Game Boy, GBA, DS, Sega, PlayStation, Xbox, Switch, etc.)
 Blue text on black background
 """
 
@@ -15,28 +16,159 @@ import zlib
 # ─── Constants ───────────────────────────────────────────────
 BYTES_PER_ROW = 16
 
-# ─── Atari Format Detector ──────────────────────────────────
-class AtariFormatDetector:
+# ─── Console Format Helpers ─────────────────────────────────
+def _fmt(name, system, **details):
+    return {"name": name, "system": system, "details": details}
+
+
+# ─── Multi-Console Format Detector ──────────────────────────
+class ConsoleFormatDetector:
+    """Detects ROM, disc, and executable formats across classic & modern consoles."""
+
+    # extension -> (display name, system) for formats without a dedicated parser
+    _EXT_SIMPLE = {
+        # Atari
+        '.a52': ('Atari 5200 ROM', 'Atari 5200'),
+        '.a26': ('Atari 2600 ROM', 'Atari 2600'),
+        '.rom': ('ROM Image', 'Atari'),
+        '.bin': ('Binary / ROM', 'Generic'),
+        # Nintendo
+        '.fds': ('Famicom Disk Image', 'Famicom Disk System'),
+        '.smc': ('SNES ROM (Super Magicom)', 'Super Nintendo'),
+        '.sfc': ('SNES ROM', 'Super Nintendo'),
+        '.fig': ('SNES ROM (FIG)', 'Super Nintendo'),
+        '.swc': ('SNES ROM (SWC)', 'Super Nintendo'),
+        '.n64': ('Nintendo 64 ROM (big-endian)', 'Nintendo 64'),
+        '.z64': ('Nintendo 64 ROM (Z64)', 'Nintendo 64'),
+        '.v64': ('Nintendo 64 ROM (V64)', 'Nintendo 64'),
+        '.gb': ('Game Boy ROM', 'Game Boy'),
+        '.gbc': ('Game Boy Color ROM', 'Game Boy Color'),
+        '.sgb': ('Super Game Boy ROM', 'Super Game Boy'),
+        '.gba': ('Game Boy Advance ROM', 'Game Boy Advance'),
+        '.agb': ('Game Boy Advance ROM', 'Game Boy Advance'),
+        '.nds': ('Nintendo DS ROM', 'Nintendo DS'),
+        '.dsi': ('Nintendo DSi ROM', 'Nintendo DSi'),
+        '.3ds': ('Nintendo 3DS ROM', 'Nintendo 3DS'),
+        '.cia': ('Nintendo 3DS CIA', 'Nintendo 3DS'),
+        '.cci': ('Nintendo 3DS CCI', 'Nintendo 3DS'),
+        '.gcm': ('GameCube Disc Image', 'Nintendo GameCube'),
+        '.rvz': ('GameCube/Wii RVZ', 'Nintendo Wii'),
+        '.wbfs': ('Wii Backup File System', 'Nintendo Wii'),
+        '.wad': ('Wii WAD Channel', 'Nintendo Wii'),
+        '.nsp': ('Nintendo Switch Package', 'Nintendo Switch'),
+        '.xci': ('Nintendo Switch Cartridge Image', 'Nintendo Switch'),
+        '.nca': ('Nintendo Switch NCA', 'Nintendo Switch'),
+        '.nso': ('Nintendo Switch NSO', 'Nintendo Switch'),
+        '.nro': ('Nintendo Switch Homebrew NRO', 'Nintendo Switch'),
+        '.nspd': ('Nintendo Switch NSPD', 'Nintendo Switch'),
+        # Sega
+        '.sms': ('Sega Master System ROM', 'Sega Master System'),
+        '.gg': ('Sega Game Gear ROM', 'Sega Game Gear'),
+        '.md': ('Sega Mega Drive ROM', 'Sega Mega Drive'),
+        '.gen': ('Sega Genesis ROM', 'Sega Genesis'),
+        '.smd': ('Sega Mega Drive ROM (SMD)', 'Sega Mega Drive'),
+        '.32x': ('Sega 32X ROM', 'Sega 32X'),
+        '.sgd': ('Sega Mega Drive ROM (SGD)', 'Sega Mega Drive'),
+        '.sat': ('Sega Saturn Disc', 'Sega Saturn'),
+        '.gdi': ('Dreamcast GDI', 'Sega Dreamcast'),
+        '.cdi': ('Dreamcast/CDI Disc', 'Sega Dreamcast'),
+        # Sony PlayStation family
+        '.psx': ('PlayStation 1 Disc Image', 'PlayStation'),
+        '.ps1': ('PlayStation 1 Disc Image', 'PlayStation'),
+        '.ps2': ('PlayStation 2 Disc Image', 'PlayStation 2'),
+        '.ps3': ('PlayStation 3 Disc Image', 'PlayStation 3'),
+        '.ps4': ('PlayStation 4 Package', 'PlayStation 4'),
+        '.ps5': ('PlayStation 5 Package', 'PlayStation 5'),
+        '.cue': ('CD Track Sheet', 'CD-ROM'),
+        '.iso': ('Disc Image (ISO9660)', 'CD/DVD'),
+        '.img': ('Disc Image', 'CD/DVD'),
+        '.cso': ('Compressed ISO (CSO)', 'PlayStation Portable'),
+        '.pbp': ('PSP EBOOT (PBP)', 'PlayStation Portable'),
+        '.sprx': ('Sony PRX/SPRX Module', 'PlayStation'),
+        '.prx': ('Sony PRX Module', 'PlayStation'),
+        '.prc': ('Sony PRC Resource', 'PlayStation'),
+        '.eboot': ('Sony EBOOT', 'PlayStation'),
+        '.vpk': ('PlayStation Vita Package', 'PlayStation Vita'),
+        # Microsoft Xbox
+        '.xbe': ('Xbox Executable', 'Xbox'),
+        '.xex': ('Xbox 360 Executable', 'Xbox 360'),
+        '.xcp': ('Xbox Content Package', 'Xbox 360'),
+        # NEC / Hudson / SNK / others
+        '.pce': ('PC Engine / TurboGrafx-16 ROM', 'PC Engine'),
+        '.sgx': ('PC Engine SuperGrafx ROM', 'PC Engine SuperGrafx'),
+        '.ngp': ('Neo Geo Pocket ROM', 'Neo Geo Pocket'),
+        '.ngc': ('Neo Geo Pocket Color ROM', 'Neo Geo Pocket Color'),
+        '.neo': ('Neo Geo ROM', 'Neo Geo'),
+        '.ng': ('Neo Geo ROM', 'Neo Geo'),
+        '.lnx': ('Atari Lynx ROM', 'Atari Lynx'),
+        '.jag': ('Atari Jaguar ROM', 'Atari Jaguar'),
+        '.j64': ('Atari Jaguar ROM (J64)', 'Atari Jaguar'),
+        '.vb': ('Virtual Boy ROM', 'Virtual Boy'),
+        '.col': ('ColecoVision ROM', 'ColecoVision'),
+        '.int': ('Intellivision ROM', 'Intellivision'),
+        '.vec': ('Vectrex ROM', 'Vectrex'),
+        '.3do': ('3DO ROM / ISO', '3DO'),
+        '.ws': ('WonderSwan ROM', 'WonderSwan'),
+        '.wsc': ('WonderSwan Color ROM', 'WonderSwan Color'),
+        '.msx': ('MSX ROM', 'MSX'),
+        '.d64': ('Commodore 64 Disk', 'Commodore 64'),
+        '.t64': ('Commodore 64 Tape', 'Commodore 64'),
+        '.tap': ('Commodore 64 Tape', 'Commodore 64'),
+        '.prg': ('Commodore 64 Program', 'Commodore 64'),
+        '.adf': ('Amiga Disk', 'Commodore Amiga'),
+        '.chd': ('MAME Compressed Hunks of Data', 'MAME/CHD'),
+    }
+
+    _EXT_PARSERS = {}  # filled after class body
+
     @staticmethod
     def detect(data, filename):
         ext = os.path.splitext(filename)[1].lower()
-        fmt = {"name": "Unknown", "system": "Unknown", "details": {}}
-        detectors = {
-            '.a78': AtariFormatDetector._parse_a78,
-            '.atr': AtariFormatDetector._parse_atr,
-            '.car': AtariFormatDetector._parse_car,
-            '.xex': AtariFormatDetector._parse_xex,
-            '.rom': lambda d: {"name": "Atari ROM", "system": "Atari", "details": {"size": len(d)}},
-        }
-        if ext in detectors:
-            fmt = detectors[ext](data)
-        elif len(data) >= 2 and data[0] == 0xFF and data[1] == 0xFF:
-            fmt = AtariFormatDetector._parse_xex(data)
-        return fmt
+        candidates = []
+
+        for test, parse, confidence in ConsoleFormatDetector._MAGIC_CHECKS:
+            if test(data):
+                candidates.append((confidence, parse(data)))
+
+        if ext in ConsoleFormatDetector._EXT_PARSERS:
+            candidates.append((85, ConsoleFormatDetector._EXT_PARSERS[ext](data)))
+        elif ext in ConsoleFormatDetector._EXT_SIMPLE:
+            name, system = ConsoleFormatDetector._EXT_SIMPLE[ext]
+            candidates.append((70, _fmt(name, system, size=len(data), extension=ext)))
+
+        if candidates:
+            candidates.sort(key=lambda c: c[0], reverse=True)
+            return candidates[0][1]
+
+        sniff = ConsoleFormatDetector._sniff(data)
+        if sniff:
+            return sniff
+
+        return _fmt("Binary", "Unknown", size=len(data))
 
     @staticmethod
+    def _sniff(data):
+        if len(data) >= 16:
+            if data[0x8000:0x8000+5] == b'CD001' or data[0x9324:0x9324+5] == b'CD001':
+                return _fmt("ISO9660 Disc Image", "CD/DVD", size=len(data), filesystem="ISO9660")
+            if data[0:4] == b'PFS0':
+                return _fmt("Nintendo Switch Package (PFS0)", "Nintendo Switch", size=len(data))
+            if data[0:4] == b'HFS0':
+                return _fmt("Nintendo Switch Package (HFS0)", "Nintendo Switch", size=len(data))
+            if data[0:4] in (b'NCA0', b'NCA2', b'NCA3'):
+                return _fmt("Nintendo Switch NCA", "Nintendo Switch", size=len(data), magic=data[0:4].decode())
+            if data[0:4] == b'XEX2':
+                return _fmt("Xbox 360 XEX", "Xbox 360", size=len(data))
+            if data[0:4] == b'SCE\x00' or (len(data) >= 16 and data[0:7] == b'\x7fELF\x02\x01'):
+                pass  # handled by dedicated parsers
+        if len(data) >= 4 and data[:4] == b'RIFF' and len(data) >= 8 and data[8:12] == b'WAVE':
+            return _fmt("WAV Audio", "Audio", size=len(data))
+        return None
+
+    # ── Atari ──
+    @staticmethod
     def _parse_a78(data):
-        fmt = {"name": "Atari 7800 ROM (.a78)", "system": "Atari 7800", "details": {}}
+        fmt = _fmt("Atari 7800 ROM (.a78)", "Atari 7800")
         if len(data) >= 128:
             hdr = data[:128]
             magic = hdr[:4]
@@ -48,11 +180,12 @@ class AtariFormatDetector:
                 fmt["details"]["cart_type"] = hdr[51]
                 fmt["details"]["controller1"] = hdr[52]
                 fmt["details"]["controller2"] = hdr[53]
+        fmt["details"]["size"] = len(data)
         return fmt
 
     @staticmethod
     def _parse_atr(data):
-        fmt = {"name": "Atari Disk Image (.atr)", "system": "Atari 8-bit", "details": {}}
+        fmt = _fmt("Atari Disk Image (.atr)", "Atari 8-bit")
         if len(data) >= 16:
             magic = struct.unpack('<H', data[0:2])[0]
             if magic == 0x0296:
@@ -63,130 +196,393 @@ class AtariFormatDetector:
                 fmt["details"]["sector_size"] = sec_size
                 fmt["details"]["total_bytes"] = paras * 16
                 fmt["details"]["sectors"] = (paras * 16) // sec_size if sec_size else 0
+        fmt["details"]["size"] = len(data)
         return fmt
 
     @staticmethod
     def _parse_car(data):
-        fmt = {"name": "Atari Cartridge (.car)", "system": "Atari 8-bit", "details": {}}
+        fmt = _fmt("Atari Cartridge (.car)", "Atari 8-bit")
         if len(data) >= 24 and data[:4] == b'CART':
             fmt["details"]["magic"] = "CART"
-            cart_type = struct.unpack('<I', data[4:8])[0]
-            fmt["details"]["cart_type_id"] = cart_type
+            fmt["details"]["cart_type_id"] = struct.unpack('<I', data[4:8])[0]
             fmt["details"]["cart_name"] = data[8:24].decode('ascii', errors='replace').strip('\x00')
+        fmt["details"]["size"] = len(data)
         return fmt
 
     @staticmethod
     def _parse_xex(data):
-        fmt = {"name": "Atari Executable (.xex)", "system": "Atari 8-bit", "details": {}}
-        if len(data) >= 4:
-            if struct.unpack('<H', data[0:2])[0] == 0xFFFF:
-                fmt["details"]["magic"] = "0xFFFF"
-                segments = []
-                pos = 2
-                while pos + 3 < len(data):
-                    if struct.unpack('<H', data[pos:pos+2])[0] == 0xFFFF:
-                        pos += 2
-                    if pos + 4 > len(data):
-                        break
-                    start = struct.unpack('<H', data[pos:pos+2])[0]
-                    end   = struct.unpack('<H', data[pos+2:pos+4])[0]
-                    if end < start:
-                        break
-                    segments.append((start, end))
-                    pos += 4 + (end - start + 1)
-                    while pos + 1 < len(data) and data[pos:pos+2] == b'\xff\xff':
-                        pos += 2
-                fmt["details"]["segments"] = segments
-                fmt["details"]["segment_count"] = len(segments)
+        fmt = _fmt("Atari Executable (.xex)", "Atari 8-bit")
+        if len(data) >= 4 and struct.unpack('<H', data[0:2])[0] == 0xFFFF:
+            fmt["details"]["magic"] = "0xFFFF"
+            segments = []
+            pos = 2
+            while pos + 3 < len(data):
+                if struct.unpack('<H', data[pos:pos+2])[0] == 0xFFFF:
+                    pos += 2
+                if pos + 4 > len(data):
+                    break
+                start = struct.unpack('<H', data[pos:pos+2])[0]
+                end = struct.unpack('<H', data[pos+2:pos+4])[0]
+                if end < start:
+                    break
+                segments.append((start, end))
+                pos += 4 + (end - start + 1)
+                while pos + 1 < len(data) and data[pos:pos+2] == b'\xff\xff':
+                    pos += 2
+            fmt["details"]["segments"] = segments
+            fmt["details"]["segment_count"] = len(segments)
+        fmt["details"]["size"] = len(data)
         return fmt
 
-
-# ─── PS5 Format Detector ────────────────────────────────────
-class PS5FormatDetector:
+    # ── Nintendo ──
     @staticmethod
-    def detect(data, filename):
-        ext = os.path.splitext(filename)[1].lower()
-        if ext == '.elf' or (len(data) >= 4 and data[:4] == b'\x7fELF'):
-            return PS5FormatDetector._parse_elf(data)
-        if ext == '.pkg':
-            return PS5FormatDetector._parse_pkg(data)
-        if ext == '.self':
-            return PS5FormatDetector._parse_self(data)
-        if ext == '.sprx':
-            return {"name": "PS5 SPRX Module", "system": "PlayStation 5",
-                    "details": {"size": len(data)}}
-        if ext == '.prc':
-            return {"name": "PS5 PRC File", "system": "PlayStation 5",
-                    "details": {"size": len(data), "magic": data[:4].hex() if len(data) >= 4 else ""}}
-        if ext == '.eboot':
-            return PS5FormatDetector._parse_elf(data)
-        return {"name": "Unknown", "system": "Unknown", "details": {}}
+    def _parse_nes(data):
+        fmt = _fmt("NES ROM (iNES)", "Nintendo NES")
+        if len(data) >= 16 and data[0:4] == b'NES\x1a':
+            prg = data[4] * 16 * 1024
+            chr_ = data[5] * 8 * 1024
+            flags6 = data[6]
+            flags7 = data[7]
+            fmt["details"]["prg_rom"] = f"{prg:,} bytes"
+            fmt["details"]["chr_rom"] = f"{chr_:,} bytes"
+            fmt["details"]["mapper"] = (flags7 & 0xF0) | (flags6 >> 4)
+            fmt["details"]["mirroring"] = "Vertical" if flags6 & 1 else "Horizontal"
+            fmt["details"]["battery"] = bool(flags6 & 2)
+            fmt["details"]["trainer"] = bool(flags6 & 4)
+            fmt["details"]["size"] = len(data)
+        return fmt
 
+    @staticmethod
+    def _parse_nes2(data):
+        fmt = _fmt("NES ROM (NES 2.0)", "Nintendo NES")
+        if len(data) >= 16 and data[0:4] == b'NES\x1a' and (data[7] & 0x0C) == 0x08:
+            fmt["details"]["format"] = "NES 2.0"
+            fmt["details"]["size"] = len(data)
+        return fmt
+
+    @staticmethod
+    def _parse_snes(data):
+        fmt = _fmt("SNES ROM", "Super Nintendo")
+        if len(data) >= 0x100:
+            title = data[0x10:0x25].decode('ascii', errors='replace').strip('\x00')
+            if title:
+                fmt["details"]["title"] = title
+            map_mode = data[0x15] if len(data) > 0x15 else 0
+            fmt["details"]["map_mode"] = f"0x{map_mode:02X}"
+            fmt["details"]["size"] = len(data)
+            fmt["details"]["rom_type"] = "LoROM" if len(data) % 0x8000 == 512 else "HiROM (likely)"
+        return fmt
+
+    @staticmethod
+    def _parse_n64(data):
+        fmt = _fmt("Nintendo 64 ROM", "Nintendo 64")
+        if len(data) >= 0x40:
+            if data[0:4] == b'\x80\x37\x12\x40':
+                fmt["details"]["endian"] = "Byte-swapped (V64)"
+            elif data[0:4] == b'\x40\x12\x37\x80':
+                fmt["details"]["endian"] = "Big-endian (Z64)"
+            elif data[0:4] == b'\x12\x37\x80\x40':
+                fmt["details"]["endian"] = "Little-endian (N64)"
+            name = data[0x20:0x34].decode('ascii', errors='replace').strip('\x00')
+            if name:
+                fmt["details"]["internal_name"] = name
+            fmt["details"]["size"] = len(data)
+        return fmt
+
+    @staticmethod
+    def _parse_gba(data):
+        fmt = _fmt("Game Boy Advance ROM", "Game Boy Advance")
+        if len(data) >= 0xC0:
+            fmt["details"]["title"] = data[0xA0:0xAC].decode('ascii', errors='replace').strip('\x00')
+            fmt["details"]["game_code"] = data[0xAC:0xB0].decode('ascii', errors='replace')
+            fmt["details"]["maker_code"] = data[0xB0:0xB2].decode('ascii', errors='replace')
+            fmt["details"]["version"] = data[0xBC]
+            fmt["details"]["size"] = len(data)
+        return fmt
+
+    @staticmethod
+    def _parse_gb(data):
+        fmt = _fmt("Game Boy / Color ROM", "Game Boy")
+        if len(data) >= 0x150:
+            fmt["details"]["title"] = data[0x134:0x144].decode('ascii', errors='replace').strip('\x00')
+            fmt["details"]["cartridge_type"] = f"0x{data[0x147]:02X}"
+            fmt["details"]["rom_size_code"] = data[0x148]
+            fmt["details"]["ram_size_code"] = data[0x149]
+            fmt["details"]["cgb_only"] = data[0x143] == 0xC0
+            fmt["details"]["size"] = len(data)
+        return fmt
+
+    @staticmethod
+    def _parse_nds(data):
+        fmt = _fmt("Nintendo DS ROM", "Nintendo DS")
+        if len(data) >= 0x200:
+            fmt["details"]["title"] = data[0x00:0x0C].decode('ascii', errors='replace').strip('\x00')
+            fmt["details"]["game_code"] = data[0x0C:0x10].decode('ascii', errors='replace')
+            fmt["details"]["maker_code"] = data[0x10:0x12].decode('ascii', errors='replace')
+            fmt["details"]["unit_code"] = data[0x12]
+            fmt["details"]["size"] = len(data)
+        return fmt
+
+    # ── Sega ──
+    @staticmethod
+    def _parse_genesis(data):
+        fmt = _fmt("Sega Mega Drive / Genesis ROM", "Sega Mega Drive")
+        for off in (0x100, 0x80):
+            if len(data) >= off + 16 and data[off:off+4] == b'SEGA':
+                fmt["details"]["header_offset"] = f"0x{off:X}"
+                fmt["details"]["system"] = data[off+8:off+16].decode('ascii', errors='replace').strip('\x00')
+                fmt["details"]["domestic_name"] = data[off+0x120:off+0x130].decode('ascii', errors='replace').strip('\x00') if len(data) >= off+0x130 else ""
+                break
+        fmt["details"]["size"] = len(data)
+        return fmt
+
+    # ── Sony / ELF ──
     @staticmethod
     def _parse_elf(data):
-        fmt = {"name": "ELF Executable", "system": "Unknown", "details": {}}
+        fmt = _fmt("ELF Executable", "Unknown")
         if len(data) < 64 or data[:4] != b'\x7fELF':
+            fmt["details"]["size"] = len(data)
             return fmt
         ei_class = data[4]
-        ei_data  = data[5]
+        ei_data = data[5]
         ei_osabi = data[7]
-        le = (ei_data == 1)
+        le = ei_data == 1
         e = '<' if le else '>'
-        e_type    = struct.unpack(e+'H', data[16:18])[0]
-        e_machine = struct.unpack(e+'H', data[18:20])[0]
+        e_type = struct.unpack(e + 'H', data[16:18])[0]
+        e_machine = struct.unpack(e + 'H', data[18:20])[0]
         if ei_class == 2:
-            e_entry = struct.unpack(e+'Q', data[24:32])[0]
-            e_phoff = struct.unpack(e+'Q', data[32:40])[0]
-            e_shoff = struct.unpack(e+'Q', data[40:48])[0]
-            e_phnum = struct.unpack(e+'H', data[56:58])[0]
-            e_shnum = struct.unpack(e+'H', data[60:62])[0]
+            e_entry = struct.unpack(e + 'Q', data[24:32])[0]
+            e_phnum = struct.unpack(e + 'H', data[56:58])[0]
+            e_shnum = struct.unpack(e + 'H', data[60:62])[0]
         else:
-            e_entry = struct.unpack(e+'I', data[24:28])[0]
-            e_phoff = struct.unpack(e+'I', data[28:32])[0]
-            e_shoff = struct.unpack(e+'I', data[32:36])[0]
-            e_phnum = struct.unpack(e+'H', data[44:46])[0]
-            e_shnum = struct.unpack(e+'H', data[48:50])[0]
-        system = "PlayStation 5" if ei_osabi in (0x64, 0x65) or e_machine == 0xB7 else "Generic"
-        if ei_class == 2 and system == "Generic":
-            system = "PlayStation (possible)"
-        type_names = {0:"NONE",1:"REL",2:"EXEC",3:"DYN",4:"CORE"}
-        fmt["name"] = f"{'PS5 ' if system=='PlayStation 5' else ''}ELF ({'64' if ei_class==2 else '32'}-bit)"
+            e_entry = struct.unpack(e + 'I', data[24:28])[0]
+            e_phnum = struct.unpack(e + 'H', data[44:46])[0]
+            e_shnum = struct.unpack(e + 'H', data[48:50])[0]
+
+        machine_map = {
+            0x08: "MIPS (PlayStation 1)",
+            0x14: "PowerPC (GameCube/Wii)",
+            0x28: "ARM (Switch/3DS/Vita)",
+            0x3E: "x86-64 (PC/PS4)",
+            0xB7: "AArch64 (PS5/Switch)",
+        }
+        system = machine_map.get(e_machine, "Generic")
+        if ei_osabi in (0x64, 0x65):
+            system = "PlayStation 5"
+        elif ei_osabi == 0x66:
+            system = "PlayStation 4"
+        elif ei_osabi in (0x09, 0x10, 0x11):
+            system = "PlayStation (PS1/PS2/PS3)"
+        elif e_machine == 0x08:
+            system = "PlayStation"
+
+        type_names = {0: "NONE", 1: "REL", 2: "EXEC", 3: "DYN", 4: "CORE"}
+        fmt["name"] = f"ELF ({'64' if ei_class == 2 else '32'}-bit)"
         fmt["system"] = system
         fmt["details"] = {
-            "class": "64-bit" if ei_class==2 else "32-bit",
+            "class": "64-bit" if ei_class == 2 else "32-bit",
             "endian": "Little" if le else "Big",
             "osabi": f"0x{ei_osabi:02X}",
             "type": type_names.get(e_type, f"0x{e_type:04X}"),
             "machine": f"0x{e_machine:04X}",
-            "entry_point": f"0x{e_entry:016X}" if ei_class==2 else f"0x{e_entry:08X}",
+            "entry_point": f"0x{e_entry:016X}" if ei_class == 2 else f"0x{e_entry:08X}",
             "program_headers": e_phnum,
             "section_headers": e_shnum,
+            "size": len(data),
         }
         return fmt
 
     @staticmethod
     def _parse_pkg(data):
-        fmt = {"name": "PlayStation Package (.pkg)", "system": "PlayStation 5", "details": {}}
+        fmt = _fmt("Sony Package (.pkg)", "PlayStation")
         if len(data) >= 64:
             magic = struct.unpack('>I', data[0:4])[0]
             if magic == 0x7F504B47:
                 fmt["details"]["magic"] = "\\x7fPKG"
-                pkg_type = struct.unpack('>I', data[4:8])[0]
-                content_size = struct.unpack('>Q', data[8:16])[0]
-                pkg_size = struct.unpack('>Q', data[24:32])[0]
-                fmt["details"]["pkg_type"] = f"0x{pkg_type:08X}"
-                fmt["details"]["content_size"] = f"{content_size:,}"
-                fmt["details"]["pkg_size"] = f"{pkg_size:,}"
-                title_id = data[48:58].decode('ascii', errors='replace').strip('\x00')
-                fmt["details"]["title_id"] = title_id
+                fmt["details"]["pkg_type"] = f"0x{struct.unpack('>I', data[4:8])[0]:08X}"
+                fmt["details"]["content_size"] = f"{struct.unpack('>Q', data[8:16])[0]:,}"
+                fmt["details"]["pkg_size"] = f"{struct.unpack('>Q', data[24:32])[0]:,}"
+                fmt["details"]["title_id"] = data[48:58].decode('ascii', errors='replace').strip('\x00')
+                if len(data) >= 0x700:
+                    ps5_hint = data[0x600:0x610]
+                    if b'PS5' in ps5_hint or struct.unpack('>I', data[4:8])[0] >= 0x00010000:
+                        fmt["system"] = "PlayStation 5"
+                        fmt["name"] = "PlayStation 5 Package (.pkg)"
+                    else:
+                        fmt["system"] = "PlayStation 4"
+                        fmt["name"] = "PlayStation 4 Package (.pkg)"
+        fmt["details"]["size"] = len(data)
         return fmt
 
     @staticmethod
     def _parse_self(data):
-        fmt = {"name": "PS5 SELF File", "system": "PlayStation 5", "details": {}}
+        fmt = _fmt("Sony SELF / SPRX", "PlayStation")
         if len(data) >= 4:
             fmt["details"]["magic"] = data[:4].hex()
+            if data[:4] == b'\x7fELF':
+                fmt = ConsoleFormatDetector._parse_elf(data)
+                fmt["name"] = "Sony SELF (ELF)"
+        fmt["details"]["size"] = len(data)
         return fmt
+
+    @staticmethod
+    def _parse_psx_exe(data):
+        fmt = _fmt("PlayStation EXE", "PlayStation")
+        if len(data) >= 0x800:
+            fmt["details"]["magic"] = data[0:8].decode('ascii', errors='replace').strip('\x00')
+            fmt["details"]["text_start"] = f"0x{struct.unpack('<I', data[0x10:0x14])[0]:08X}"
+            fmt["details"]["text_size"] = struct.unpack('<I', data[0x1C:0x20])[0]
+            fmt["details"]["entry_point"] = f"0x{struct.unpack('<I', data[0x28:0x2C])[0]:08X}"
+        fmt["details"]["size"] = len(data)
+        return fmt
+
+    @staticmethod
+    def _parse_xex360(data):
+        fmt = _fmt("Xbox 360 Executable (XEX)", "Xbox 360")
+        if len(data) >= 24 and data[0:4] == b'XEX2':
+            fmt["details"]["magic"] = "XEX2"
+            fmt["details"]["image_size"] = struct.unpack('<I', data[0x10:0x14])[0] if len(data) >= 0x14 else 0
+        fmt["details"]["size"] = len(data)
+        return fmt
+
+    @staticmethod
+    def _parse_xex_or_atari(data):
+        if len(data) >= 4 and data[0:4] == b'XEX2':
+            return ConsoleFormatDetector._parse_xex360(data)
+        return ConsoleFormatDetector._parse_xex(data)
+
+    @staticmethod
+    def _parse_xbe(data):
+        fmt = _fmt("Xbox Executable (XBE)", "Xbox")
+        if len(data) >= 0x104 and data[0:4] == b'XBEH':
+            fmt["details"]["magic"] = "XBEH"
+            fmt["details"]["base_address"] = f"0x{struct.unpack('<I', data[0x104:0x108])[0]:08X}"
+            fmt["details"]["entry_point"] = f"0x{struct.unpack('<I', data[0x128:0x12C])[0]:08X}"
+            fmt["details"]["certificate_size"] = struct.unpack('<I', data[0x258:0x25C])[0] if len(data) >= 0x25C else 0
+        fmt["details"]["size"] = len(data)
+        return fmt
+
+
+# Extension-specific parsers and magic-byte checks (registered after methods exist)
+ConsoleFormatDetector._EXT_PARSERS = {
+    '.a78': ConsoleFormatDetector._parse_a78,
+    '.atr': ConsoleFormatDetector._parse_atr,
+    '.car': ConsoleFormatDetector._parse_car,
+    '.xex': ConsoleFormatDetector._parse_xex_or_atari,
+    '.nes': ConsoleFormatDetector._parse_nes,
+    '.unf': ConsoleFormatDetector._parse_nes,
+    '.unif': ConsoleFormatDetector._parse_nes,
+    '.smc': ConsoleFormatDetector._parse_snes,
+    '.sfc': ConsoleFormatDetector._parse_snes,
+    '.fig': ConsoleFormatDetector._parse_snes,
+    '.swc': ConsoleFormatDetector._parse_snes,
+    '.n64': ConsoleFormatDetector._parse_n64,
+    '.z64': ConsoleFormatDetector._parse_n64,
+    '.v64': ConsoleFormatDetector._parse_n64,
+    '.gba': ConsoleFormatDetector._parse_gba,
+    '.agb': ConsoleFormatDetector._parse_gba,
+    '.gb': ConsoleFormatDetector._parse_gb,
+    '.gbc': ConsoleFormatDetector._parse_gb,
+    '.sgb': ConsoleFormatDetector._parse_gb,
+    '.nds': ConsoleFormatDetector._parse_nds,
+    '.md': ConsoleFormatDetector._parse_genesis,
+    '.gen': ConsoleFormatDetector._parse_genesis,
+    '.smd': ConsoleFormatDetector._parse_genesis,
+    '.32x': ConsoleFormatDetector._parse_genesis,
+    '.sgd': ConsoleFormatDetector._parse_genesis,
+    '.elf': ConsoleFormatDetector._parse_elf,
+    '.o': ConsoleFormatDetector._parse_elf,
+    '.self': ConsoleFormatDetector._parse_self,
+    '.sprx': ConsoleFormatDetector._parse_self,
+    '.prx': ConsoleFormatDetector._parse_self,
+    '.eboot': ConsoleFormatDetector._parse_elf,
+    '.pkg': ConsoleFormatDetector._parse_pkg,
+    '.xbe': ConsoleFormatDetector._parse_xbe,
+}
+
+ConsoleFormatDetector._MAGIC_CHECKS = [
+    (lambda d: len(d) >= 4 and d[:4] == b'NES\x1a', ConsoleFormatDetector._parse_nes, 95),
+    (lambda d: len(d) >= 4 and d[:4] == b'\x7fELF', ConsoleFormatDetector._parse_elf, 92),
+    (lambda d: len(d) >= 4 and d[:4] == b'XBEH', ConsoleFormatDetector._parse_xbe, 95),
+    (lambda d: len(d) >= 4 and d[:4] == b'XEX2', ConsoleFormatDetector._parse_xex360, 96),
+    (lambda d: len(d) >= 8 and d[:8] == b'PS-X EXE', ConsoleFormatDetector._parse_psx_exe, 95),
+    (lambda d: len(d) >= 2 and d[0] == 0xFF and d[1] == 0xFF, ConsoleFormatDetector._parse_xex, 90),
+    (lambda d: len(d) >= 4 and d[:4] == b'CART', ConsoleFormatDetector._parse_car, 90),
+    (lambda d: len(d) >= 16 and struct.unpack('<H', d[0:2])[0] == 0x0296, ConsoleFormatDetector._parse_atr, 90),
+    (lambda d: len(d) >= 0x100 and (d[0x100:0x104] == b'SEGA' or d[0x80:0x84] == b'SEGA'),
+     ConsoleFormatDetector._parse_genesis, 88),
+    (lambda d: len(d) >= 0xC0 and d[0x04:0x06] == b'\x01\x00', ConsoleFormatDetector._parse_gba, 85),
+    (lambda d: len(d) >= 0x150 and d[0x104:0x108] == b'\xce\xed\x66\x66', ConsoleFormatDetector._parse_gb, 90),
+    (lambda d: len(d) >= 0x200 and d[0x00:0x0C].isascii(), ConsoleFormatDetector._parse_nds, 75),
+    (lambda d: len(d) >= 64 and struct.unpack('>I', d[0:4])[0] == 0x7F504B47, ConsoleFormatDetector._parse_pkg, 93),
+    (lambda d: len(d) >= 128 and d[:4] in (b'ATARI', b'A780'), ConsoleFormatDetector._parse_a78, 95),
+    (lambda d: len(d) >= 0x40 and d[0:4] in (b'\x80\x37\x12\x40', b'\x40\x12\x37\x80', b'\x12\x37\x80\x40'),
+     ConsoleFormatDetector._parse_n64, 90),
+    (lambda d: len(d) >= 0x100 and d[0x10:0x25].isascii(), ConsoleFormatDetector._parse_snes, 70),
+]
+
+
+# Legacy aliases (kept for compatibility)
+class AtariFormatDetector:
+    @staticmethod
+    def detect(data, filename):
+        result = ConsoleFormatDetector.detect(data, filename)
+        if "Atari" in result.get("system", ""):
+            return result
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in {'.a78', '.atr', '.car', '.xex', '.rom', '.a26', '.a52'}:
+            return ConsoleFormatDetector._EXT_PARSERS.get(ext, lambda d: _fmt("Atari ROM", "Atari", size=len(d)))(data)
+        if len(data) >= 2 and data[0] == 0xFF and data[1] == 0xFF:
+            return ConsoleFormatDetector._parse_xex(data)
+        return {"name": "Unknown", "system": "Unknown", "details": {}}
+
+
+class PS5FormatDetector:
+    @staticmethod
+    def detect(data, filename):
+        result = ConsoleFormatDetector.detect(data, filename)
+        if "PlayStation" in result.get("system", ""):
+            return result
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in {'.elf', '.self', '.sprx', '.pkg', '.prc', '.eboot', '.prx'}:
+            return ConsoleFormatDetector.detect(data, filename)
+        return {"name": "Unknown", "system": "Unknown", "details": {}}
+
+
+CONSOLE_FORMAT_REFERENCE = """
+══════ Supported Console & ROM Formats ══════
+
+Atari
+  .a26 .a52 .a78 .atr .car .xex .rom .lnx .jag .j64
+
+Nintendo
+  .nes .fds .smc .sfc .fig .swc
+  .n64 .z64 .v64
+  .gb .gbc .sgb .gba .agb
+  .nds .dsi .3ds .cia .cci
+  .gcm .wbfs .wad .rvz
+  .nsp .xci .nca .nso .nro
+
+Sega
+  .sms .gg .md .gen .smd .sgd .32x
+  .sat .gdi .cdi
+
+Sony PlayStation
+  .psx .ps1 .ps2 .ps3 .ps4 .ps5
+  .iso .bin .cue .img .cso .pbp .vpk
+  .elf .self .sprx .prx .pkg .prc .eboot
+
+Microsoft Xbox
+  .xbe .xex .xcp
+
+Other Classic Systems
+  .pce .sgx .neo .ng .ngp .ngc
+  .vb .col .int .vec .3do .ws .wsc .msx
+  .d64 .t64 .tap .prg .adf .chd
+
+Magic-byte auto-detection works for iNES, ELF, XBE, PS-X EXE,
+Sega header, Game Boy logo, GBA header, N64 endian, PKG, and more.
+"""
 
 
 # ─── Main Application ────────────────────────────────────────
@@ -330,8 +726,7 @@ class ACHexEditor:
         tm.add_command(label="File Info…", command=self.show_file_info, accelerator="Ctrl+D")
         tm.add_command(label="Checksums…", command=self.show_checksums)
         tm.add_separator()
-        tm.add_command(label="Atari Format Info", command=self.show_atari_info)
-        tm.add_command(label="PS5 Format Info", command=self.show_ps5_info)
+        tm.add_command(label="Console Format Reference…", command=self.show_console_info)
         tm.add_separator()
         tm.add_command(label="Export Hex Dump…", command=self.export_hex_dump)
         tm.add_command(label="Export C Array…", command=self.export_c)
@@ -455,8 +850,16 @@ class ACHexEditor:
     def open_file(self):
         p = filedialog.askopenfilename(
             title="Open — AC's Hex Editor",
-            filetypes=[("All","*.*"),("Atari","*.a78 *.atr *.car *.xex *.rom"),
-                       ("PS5","*.elf *.self *.sprx *.pkg *.prc *.eboot"),("Binary","*.bin *.dat")])
+            filetypes=[
+                ("All Files", "*.*"),
+                ("Nintendo", "*.nes *.fds *.smc *.sfc *.n64 *.z64 *.v64 *.gb *.gbc *.gba *.nds *.3ds *.cia *.gcm *.wbfs *.wad *.nsp *.xci *.nca"),
+                ("Sega", "*.sms *.gg *.md *.gen *.smd *.32x *.sat *.gdi *.cdi"),
+                ("Sony PlayStation", "*.elf *.self *.sprx *.pkg *.prc *.eboot *.iso *.bin *.cso *.pbp *.vpk"),
+                ("Atari", "*.a78 *.atr *.car *.xex *.rom *.a26 *.a52 *.lnx *.jag"),
+                ("Microsoft Xbox", "*.xbe *.xex"),
+                ("Other Consoles", "*.pce *.neo *.vb *.ws *.wsc *.msx *.chd"),
+                ("Binary", "*.bin *.dat *.img"),
+            ])
         if p: self._load(p)
 
     def import_hex(self):
@@ -516,24 +919,18 @@ class ACHexEditor:
 
     def _detect_format(self):
         path = self.file_path or ""
-        ps5  = PS5FormatDetector.detect(self.file_data, path)
-        atari = AtariFormatDetector.detect(self.file_data, path)
-        ext = os.path.splitext(path)[1].lower()
-        atari_exts = {'.a78','.atr','.car','.xex','.rom'}
-        ps5_exts   = {'.elf','.self','.sprx','.pkg','.prc','.eboot'}
-        if atari["system"].startswith("Atari") or ext in atari_exts:
-            self.file_format_info = atari
-        elif ps5["system"].startswith("PlayStation") or ext in ps5_exts:
-            self.file_format_info = ps5
-        else:
-            self.file_format_info = {"name":"Binary","system":"Unknown","details":{"size":len(self.file_data)}}
+        self.file_format_info = ConsoleFormatDetector.detect(self.file_data, path)
 
         fn = os.path.basename(path) if path else "Untitled"
         self.lbl_file.config(text=f"📄 {fn}", fg=self.C_TEXT)
         fi = self.file_format_info
-        tag = "🎮" if "Atari" in fi.get("system","") or "Play" in fi.get("system","") else "📦"
-        self.lbl_format.config(text=f"{tag} {fi['name']}  [{fi['system']}]",
-                               fg=self.C_INFO if "Atari" in fi.get("system","") else self.C_ACCENT)
+        system = fi.get("system", "")
+        known = system != "Unknown" and system != "Generic"
+        tag = "🎮" if known else "📦"
+        self.lbl_format.config(
+            text=f"{tag} {fi['name']}  [{fi['system']}]",
+            fg=self.C_INFO if known else self.C_ACCENT,
+        )
 
     def save_file(self):
         if self.file_path:
@@ -549,8 +946,14 @@ class ACHexEditor:
     def save_as(self):
         p = filedialog.asksaveasfilename(
             title="Save As — AC's Hex Editor", defaultextension=".bin",
-            filetypes=[("Binary","*.bin"),("All","*.*"),("Atari","*.a78 *.car *.rom *.atr *.xex"),
-                       ("PS5","*.elf *.pkg *.self")])
+            filetypes=[
+                ("Binary", "*.bin"),
+                ("All Files", "*.*"),
+                ("Nintendo", "*.nes *.sfc *.gba *.nds"),
+                ("Sega", "*.md *.sms"),
+                ("Sony", "*.elf *.pkg *.self"),
+                ("Atari", "*.a78 *.car *.rom *.atr *.xex"),
+            ])
         if p:
             try:
                 open(p,'wb').write(self.file_data)
@@ -999,29 +1402,24 @@ class ACHexEditor:
         txt += f"  MD5    : {md5}\n  SHA1   : {sha1}\n  SHA256 : {sha256}\n  CRC32  : {crc}\n"
         self._info_window("Checksums", txt)
 
-    def show_atari_info(self):
-        txt = "══════ Atari Format Support ══════\n\n"
-        txt += "  .a78  — Atari 7800 ROM\n  .atr  — Atari 8-bit Disk Image\n"
-        txt += "  .car  — Atari 8-bit Cartridge\n  .xex  — Atari 8-bit Executable\n"
-        txt += "  .rom  — Generic ROM\n  .bin  — Auto-detect\n\n"
+    def show_console_info(self):
+        txt = CONSOLE_FORMAT_REFERENCE.strip() + "\n\n"
         fi = self.file_format_info or {}
-        if "Atari" in fi.get("system",""):
+        if fi.get("system") not in ("Unknown", "Generic", ""):
             txt += "Current file:\n"
-            for k,v in fi.get('details',{}).items(): txt += f"  {k}: {v}\n"
-        else: txt += "Current file is not an Atari format.\n"
-        self._info_window("Atari Info", txt)
+            txt += f"  Format : {fi.get('name', '—')}\n"
+            txt += f"  System : {fi.get('system', '—')}\n"
+            for k, v in fi.get('details', {}).items():
+                txt += f"  {k:14s}: {v}\n"
+        else:
+            txt += "Current file: unrecognized or generic binary.\n"
+        self._info_window("Console Formats", txt)
+
+    def show_atari_info(self):
+        self.show_console_info()
 
     def show_ps5_info(self):
-        txt = "══════ PlayStation 5 Format Support ══════\n\n"
-        txt += "  .elf   — PS5 ELF Executable\n  .self  — PS5 SELF Executable\n"
-        txt += "  .sprx  — PS5 SPRX Module\n  .pkg   — PS5 Package\n"
-        txt += "  .prc   — PS5 PRC File\n  .eboot — PS5 EBOOT\n\n"
-        fi = self.file_format_info or {}
-        if "PlayStation" in fi.get("system",""):
-            txt += "Current file:\n"
-            for k,v in fi.get('details',{}).items(): txt += f"  {k}: {v}\n"
-        else: txt += "Current file is not a PS5 format.\n"
-        self._info_window("PS5 Info", txt)
+        self.show_console_info()
 
     # ────────── export ──────────
     def export_hex_dump(self):
